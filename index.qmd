@@ -1,5 +1,5 @@
 ---
-title: "Weekly Summary Template"
+title: "Week 11 Summary"
 author: "Author Name"
 title-block-banner: true
 title-block-style: default
@@ -8,69 +8,338 @@ format: html
 # format: pdf
 ---
 
----
+------------------------------------------------------------------------
 
-## Tuesday, Jan 17
+## Tuesday, April 4
 
-::: {.callout-important}
+::: callout-important
 ## TIL
 
-Include a _very brief_ summary of what you learnt in this class here. 
+Include a *very brief* summary of what you learnt in this class here.
 
 Today, I learnt the following concepts in class:
 
-1. Item 1
-1. Item 2
-1. Item 3
+1.  Neural Network Recap
+2.  HW4 Review
 :::
 
-Provide more concrete details here. You can also use footenotes[^footnote] if you like
+Provide more concrete details here. You can also use footenotes[^1] if you like
 
-```{R results='hide'}
-#| output: false
+[^1]: You can include some footnotes here
+
+```{R}
+packages <- c("ISLR2","dplyr","tidyr","readr","purrr","glmnet","caret","car")
+packages2 <- c("mlbench","repr","nnet","rpart","e1071")
+#renv::install(packages)
+#renv::install(packages2)
+library(ISLR2)
 library(dplyr)
+library(tidyr)
+library(readr)
 library(purrr)
+library(glmnet)
+library(caret)
+library(car)
+library(mlbench)
+library(repr)
+library(nnet)
+library(rpart)
+library(e1071)
+#install.packages("torch")
+library(torch)
+#install_torch()
+install.packages("luz")
+install.packages("torchvision")
+library(luz)
+library(torchvision)
 ```
 
+### Neural network recap
 
-For example: 
-in class we learnt we learnt about the `map` function from the `purrr` package. 
+Recall NN's with 1 hidden layer:
 
+```{R}
+hh1module <- nn_module(
+  initialize=function(){
+    self$input.hidden <- nn_linear(2,20)
+    self$hidden.output <- nn_linear(20,1) # instead of only one linear layer, we feed the input x_n through another transformation to z_n before linearizing z to a singular linear model, which is then fed through the sigmoid function in the following line.
+    self$activate <- nn_relu() # ReLU(x)=0 for any x<0, and ReLU(x)=x for x>0. If the hidden layer z_n is negative, it just becomes zero.
+    self$sigmoid <- nn_sigmoid()
+  },
+  forward = function(x){
+    x %>%
+      self$input.hidden() %>%
+      self$activate() %>%
+      self$hidden.output() %>%
+      self$sigmoid()
+  }
+)
 
-```{R results='hide', fig.width=7, fig.height=7}
-par(mfrow=c(3, 3), mar=c(3.5, 3.5, 2, 1), mgp=c(2.4, 0.8, 0))
-map(1:9, function(i)rnorm(1000) %>% hist(., main=i, col=i))
+x <- t(replicate(200, 2*runif(2)-1))
+ex5<- \(x) ifelse(sum(x^3) <=0.1,0,1)
+y <- apply(x,1,ex5)%>%as.factor()
+df<-data.frame(y=y,x1=x[,1],x2=x[,2])
+model<-glm(y~.,df,family=binomial())
+X_tensor <- torch_tensor(df[,-1] %>% as.matrix(), dtype=torch_float())
+y_tensor <- torch_tensor(cbind(df[,1] %>% as.numeric()-1),dtype=torch_float())
+
+Loss <- function(x,y,model){
+  nn_bce_loss()(model(x),y)
+}
+F<-hh1module()
 ```
 
+```{R}
+F(torch_randn(20,2))
+```
 
+Notice that commenting out the activation doesn't do a huge amount to the output, so it's really working internally. Getting rid of the sigmoid layer returns real values instead of probabilities.
 
-## Thursday, Jan 19
+```{R}
+hh2module <- nn_module(
+  initialize=function(){
+    self$input.hidden <- nn_linear(2,20)
+    self$hidden.hidden <- nn_linear(20,100)
+    self$hidden.output <- nn_linear(100,1)
+    self$activate <- nn_relu()
+    self$sigmoid <- nn_sigmoid()
+  },
+  forward = function(x){
+    x %>%
+      self$input.hidden() %>%
+      self$activate() %>%
+      self$hidden.hidden()%>%
+      self$activate()%>%
+      self$hidden.output() %>%
+      self$sigmoid()
+  }
+)
+F2 <-hh2module()
 
+F2(torch_randn(20,2))
+```
 
+This one just uses 2 hidden layers.
 
-::: {.callout-important}
+```{R}
+optimizer <- optim_adam(F$parameters,lr=0.05)
+steps=1000
+for(i in 1:steps){
+  loss<-Loss(X_tensor,y_tensor,F)
+  
+  optimizer$zero_grad()
+  loss$backward()
+  optimizer$step()
+  
+  if(i<10 || i %%100==0){
+    cat(sprintf("Epoch: %d, Loss: %.4f\n",i,loss$item()))
+  }
+}
+```
+
+Regression with neural networks
+
+```{R}
+generate_data<-function(n,noise=0.1){
+  x<-seq(1*pi,1.8*pi,length.out=n)
+  y<-exp(x)*(sin(150/x)+rnorm(n,0,noise))
+  data.frame(x=x,y=y)
+}
+
+df<-generate_data(200,noise=0.1)
+plot(df$x,df$y,pch=19)
+
+x_new <- seq(0.9*pi, 2.1*pi, length.out=1000)
+df_new <- data.frame(x=x_new)
+
+plt_reg <- function(f,x,...){
+  ynew<-f(x)
+  ylim<-range(c(ynew,df$y))
+  ylim[1] <- max(c(-800,ylim[1]))
+  ylim[2] <- min(c(250,ylim[2]))
+  xlim <- range(x)
+  plot(df$x,df$y,pch=22,col="red",xlim = xlim,ylim=ylim,...)
+  points(x[,1],ynew,pch=22,type="l")
+}
+```
+
+```{R}
+reg_module <- nn_module(
+  initialize = function(){
+    self$f <- nn_linear(1,20)
+    self$g <- nn_linear(20,100)
+    self$h <- nn_linear(100,1)
+    self$a <- nn_relu()
+  },
+  forward = function(x){
+    x %>%
+      self$f() %>%
+      self$a() %>%
+      self$g() %>%
+      self$a() %>%
+      self$h()
+  }
+)
+f_nn <- function(x){
+  F<-reg_module()
+  X_tensor <- torch_tensor(df$x%>%as.matrix(),dtype=torch_float())
+  y_tensor<-torch_tensor(cbind(df$y),dtype=torch_float())
+  optimizer<-optim_adam(F$parameters,lr=0.006)
+  epochs<-2000
+  
+  for(i in 1:epochs){
+    loss<-nn_mse_loss()(F(X_tensor),y_tensor)
+    optimizer$zero_grad()
+    loss$backward()
+    optimizer$step()
+  }
+  return(as_array(F(torch_tensor(x%>%as.matrix(),dtype=torch_float()))))
+}
+
+plt_reg(f_nn,df_new)
+```
+
+Recall this distribution and how various methods attempt to perform regression on it.
+
+**The rest of class was used for going over Homework 4.**
+
+## Thursday, April 6
+
+::: callout-important
 ## TIL
 
-Include a _very brief_ summary of what you learnt in this class here. 
+Include a *very brief* summary of what you learnt in this class here.
 
 Today, I learnt the following concepts in class:
 
-1. Item 1
-1. Item 2
-1. Item 3
+1.  Introduction to Luz
+2.  Hyperparameters
+3.  Luz metrics
 :::
 
-Provide more concrete details here, e.g., 
+Provide more concrete details here:
 
-In class we learnt how to use the `map` function to create multiple regression diagnostic plots
+### Luz hyperparameters
 
-```{R results='hide', fig.height=4}
-par(mfcol=c(2, 3), mar=c(3.5, 3.5, 2, 1), mgp=c(2.4, 0.8, 0))
-mtcars %>%
-  split(.$cyl) %>%
-  map(~ lm(mpg ~ wt, data = .x)) %>%
-  map(function(x)plot(x, which=c(1, 2)))
+```{R}
+ex <- \(x) ifelse(
+    ((abs(x[1]) + 0.05 * rnorm(1)  > 0.50 && abs(x[2]) + 0.05 * rnorm(1)  > 0.50)) || 
+    ((abs(x[1]) + 0.05 * rnorm(1)  < 0.25 && abs(x[2]) + 0.05 * rnorm(1)  < 0.25)),
+    1, 0
+)
+
+gen_classification_data <- function(n=500){
+    X <- t(replicate(n, 2 * runif(2) - 1))
+    y <- apply(X, 1, ex) %>% as.factor()
+    col <- ifelse(y == 0, "blue", "red")
+    df <- data.frame(y = y, x1 = X[, 1], x2 = X[, 2], col=col)
+    return(df)
+}
+df <- gen_classification_data(500)
+plot(df$x1, df$x2, col = df$col, pch = 19)
 ```
 
 
-[^footnote]: You can include some footnotes here
+Hidden layer hyperparameters:
+```{R}
+nn_model <- nn_module(
+  initialize = function(p,q1,q2,q3){
+    self$hidden1 <- nn_linear(p,q1)
+    self$hidden2 <- nn_linear(q1,q2)
+    self$hidden3 <- nn_linear(q2,q3)
+    self$out <- nn_linear(q3,1)
+    self$activate <- nn_relu()
+    self$sig <- nn_sigmoid()
+  },
+  forward = function(x){
+    x %>%
+      self$hidden1() %>%
+      self$activate() %>%
+      self$hidden2()%>%
+      self$activate()%>%
+      self$hidden3()%>%
+      self$out() %>%
+      self$sig()
+  }
+)
+
+x <- torch_randn(10,1000)
+
+nn_model(p=1000,q1=10,q2=20,q3=30)(x)
+```
+
+```{R}
+fit_nn<-nn_model %>% setup(loss=nn_bce_loss(),optimizer=optim_adam) %>%
+  set_hparams(p=2,q1=5,q2=7,q3=5) %>%
+  set_opt_hparams(lr=0.02)%>%
+  fit(data=list(as.matrix(df[,c(-1,-4)]),as.numeric(df[,1])-1),epochs=10,verbose=TRUE)
+# this sets up our gradient descent via a luz module more conveniently than our old method would
+```
+
+```{R}
+plot(fit_nn)
+```
+
+```{R}
+predict(fit_nn,cbind(rnorm(10,mean=0),rnorm(10,mean=0)))
+```
+
+```{R}
+test_ind <- sample(1:nrow(df),23,replace=FALSE)
+
+fit_nn<-nn_model %>% setup(loss=nn_bce_loss(),optimizer=optim_adam) %>%
+  set_hparams(p=2,q1=5,q2=7,q3=5) %>%
+  set_opt_hparams(lr=0.02)%>%
+  fit(data=list(
+    as.matrix(df[-test_ind,c(-1,-4)]),
+    as.numeric(df[-test_ind,1])-1),
+    valid_data=list(
+      as.matrix(df[+test_ind,c(-1,-4)]),
+      as.numeric(df[+test_ind,1])-1),
+    epochs=10,verbose=TRUE)
+
+plot(fit_nn)
+```
+
+Luz metrics:
+
+We can look at metrics other than the loss function during the NN training procedure
+```{R}
+predicted <- torch_randn(100)
+expected <- torch_randn(100)
+metric<-luz_metric_mse()
+metric<-metric$new()
+metric$update(predicted,expected)
+metric$compute()
+```
+
+```{R}
+predicted <- torch_tensor(sample(0:1,100,replace=TRUE))
+expected <- torch_tensor(sample(0:1,100,replace=TRUE))
+metric<-luz_metric_binary_accuracy()
+metric<-metric$new()
+metric$update(predicted,expected)
+metric$compute()
+```
+
+Putting it all together:
+```{R}
+test_ind <- sample(1:nrow(df),23,replace=FALSE)
+
+fit_nn<-nn_model %>% setup(loss=nn_bce_loss(),optimizer=optim_adam,
+                           metrics=list(luz_metric_binary_accuracy(),luz_metric_binary_auroc())) %>%
+  set_hparams(p=2,q1=5,q2=7,q3=5) %>%
+  set_opt_hparams(lr=0.01)%>%
+  fit(data=list(
+    as.matrix(df[-test_ind,c(-1,-4)]),
+    as.numeric(df[-test_ind,1])-1),
+    valid_data=list(
+      as.matrix(df[+test_ind,c(-1,-4)]),
+      as.numeric(df[+test_ind,1])-1),
+    epochs=10,verbose=TRUE)
+
+plot(fit_nn)
+```
+
+
+
